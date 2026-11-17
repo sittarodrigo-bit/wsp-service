@@ -36,6 +36,8 @@ let sock = null;
 let colaEnvios = [];
 let enviandoAhora = false;
 let logCampana = [];
+let mensajesEntrantes = []; // bandeja de respuestas (máx 500)
+const MAX_MENSAJES = 500;
 
 // ── Manejo global de errores ───────────────────────────────────
 process.on('unhandledRejection', (reason) => {
@@ -99,6 +101,34 @@ async function iniciarCliente() {
         });
 
         sock.ev.on('creds.update', saveCreds);
+
+        // ── Mensajes entrantes ─────────────────────────────────
+        sock.ev.on('messages.upsert', ({ messages, type }) => {
+            if (type !== 'notify') return;
+            for (const msg of messages) {
+                if (!msg.message) continue;
+                if (msg.key.fromMe) continue; // ignorar los que yo envié
+                const jid = msg.key.remoteJid || '';
+                if (jid.endsWith('@g.us')) continue; // ignorar grupos
+
+                const numero = jid.replace('@s.whatsapp.net', '');
+                const contenido = msg.message?.conversation
+                    || msg.message?.extendedTextMessage?.text
+                    || msg.message?.imageMessage?.caption
+                    || '[imagen/archivo]';
+
+                const entrada = {
+                    id: msg.key.id,
+                    numero,
+                    texto: contenido,
+                    ts: new Date(Number(msg.messageTimestamp) * 1000).toISOString(),
+                    leido: false
+                };
+                console.log(`[WSP] ← Mensaje de ${numero}: ${contenido.slice(0, 60)}`);
+                mensajesEntrantes.unshift(entrada);
+                if (mensajesEntrantes.length > MAX_MENSAJES) mensajesEntrantes.pop();
+            }
+        });
 
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect, qr } = update;
@@ -285,6 +315,22 @@ app.get('/campania/:id/log', auth, (req, res) => {
         errores: logs.filter(l => l.estado === 'error').length,
         pendientes: colaEnvios.filter(c => c.campaniaId === req.params.id).length
     });
+});
+
+// Bandeja de respuestas
+app.get('/mensajes', auth, (req, res) => {
+    const desde = req.query.desde ? new Date(req.query.desde) : null;
+    const lista = desde
+        ? mensajesEntrantes.filter(m => new Date(m.ts) > desde)
+        : mensajesEntrantes.slice(0, 100);
+    res.json({ mensajes: lista, total: mensajesEntrantes.length });
+});
+
+// Marcar como leído
+app.post('/mensajes/:id/leido', auth, (req, res) => {
+    const m = mensajesEntrantes.find(x => x.id === req.params.id);
+    if (m) m.leido = true;
+    res.json({ ok: true });
 });
 
 // Envío único (testing)
