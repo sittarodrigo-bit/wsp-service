@@ -1,0 +1,4 @@
+node_modules/
+wsp-session/
+.env
+*.log
