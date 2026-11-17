@@ -17,7 +17,12 @@ const path = require('path');
 
 const app = express();
 app.use(express.json({ limit: '20mb' }));
-app.use(cors());
+app.use(cors({
+    origin: '*',
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'x-api-key']
+}));
+app.options('*', cors());
 
 const PORT = process.env.PORT || 3001;
 const API_KEY = process.env.WSP_API_KEY || 'portal-viento-wsp-key';
