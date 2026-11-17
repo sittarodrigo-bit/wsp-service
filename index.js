@@ -12,11 +12,21 @@ const API_KEY = process.env.WSP_API_KEY || 'portal-viento-wsp-key';
 
 // ── Estado global ──────────────────────────────────────────────
 let estado = 'desconectado'; // desconectado | esperando_qr | conectado | error
+let ultimoError = null;
 let qrDataUrl = null;
 let clienteWsp = null;
 let colaEnvios = [];
 let enviandoAhora = false;
 let logCampana = [];
+
+// ── Manejo global de errores no capturados ─────────────────────
+process.on('unhandledRejection', (reason) => {
+    console.error('[WSP] unhandledRejection:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+    console.error('[WSP] uncaughtException:', err);
+});
 
 // ── Auth middleware ────────────────────────────────────────────
 function auth(req, res, next) {
@@ -26,18 +36,19 @@ function auth(req, res, next) {
 }
 
 // ── Inicializar cliente WhatsApp ───────────────────────────────
-function iniciarCliente() {
+async function iniciarCliente() {
     if (clienteWsp) {
         try { clienteWsp.destroy(); } catch(e) {}
     }
     estado = 'esperando_qr';
     qrDataUrl = null;
+    ultimoError = null;
 
     clienteWsp = new Client({
         authStrategy: new LocalAuth({ dataPath: './wsp-session' }),
         puppeteer: {
             headless: true,
-            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/root/.nix-profile/bin/chromium',
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
@@ -69,16 +80,19 @@ function iniciarCliente() {
         console.log('[WSP] Cliente listo y conectado');
         estado = 'conectado';
         qrDataUrl = null;
+        ultimoError = null;
+        // Retomar envíos pendientes si había cola
+        procesarCola();
     });
 
     clienteWsp.on('authenticated', () => {
         console.log('[WSP] Autenticado');
-        estado = 'conectado';
     });
 
-    clienteWsp.on('auth_failure', () => {
-        console.log('[WSP] Fallo de autenticación');
+    clienteWsp.on('auth_failure', (msg) => {
+        console.log('[WSP] Fallo de autenticación:', msg);
         estado = 'error';
+        ultimoError = 'auth_failure: ' + msg;
     });
 
     clienteWsp.on('disconnected', (reason) => {
@@ -87,7 +101,13 @@ function iniciarCliente() {
         clienteWsp = null;
     });
 
-    clienteWsp.initialize();
+    try {
+        await clienteWsp.initialize();
+    } catch(e) {
+        console.error('[WSP] Error en initialize():', e.message);
+        estado = 'error';
+        ultimoError = e.message;
+    }
 }
 
 // ── Helpers ────────────────────────────────────────────────────
@@ -96,16 +116,11 @@ function sleep(ms) {
 }
 
 function formatearNumero(tel) {
-    // Eliminar todo lo que no sea dígito
     let num = String(tel).replace(/\D/g, '');
-    // Si empieza con 0 (Argentina local), sacar el 0 y agregar 549
     if (num.startsWith('0')) num = num.slice(1);
-    // Si ya tiene código de país 54
     if (num.startsWith('54')) {
-        // Asegurar el 9 para móviles argentinos: 54 + 9 + área + número
         if (!num.startsWith('549')) num = '549' + num.slice(2);
     } else {
-        // Asumir Argentina
         num = '549' + num;
     }
     return num + '@c.us';
@@ -119,42 +134,55 @@ async function procesarCola() {
     enviandoAhora = true;
     console.log(`[WSP] Iniciando envío de ${colaEnvios.length} mensajes`);
 
-    while (colaEnvios.length > 0) {
-        const item = colaEnvios.shift();
-        const { numero, mensaje, imagenBase64, campaniaId } = item;
-
-        try {
-            const chatId = formatearNumero(numero);
-            if (imagenBase64) {
-                const media = new MessageMedia('image/jpeg', imagenBase64, 'promo.jpg');
-                await clienteWsp.sendMessage(chatId, media, { caption: mensaje });
-            } else {
-                await clienteWsp.sendMessage(chatId, mensaje);
+    try {
+        while (colaEnvios.length > 0) {
+            // Si se desconectó a mitad, cortar sin perder la cola
+            if (estado !== 'conectado') {
+                console.log('[WSP] Conexión perdida, pausando cola. Quedan:', colaEnvios.length);
+                break;
             }
-            console.log(`[WSP] ✓ Enviado a ${numero}`);
-            logCampana.push({ numero, estado: 'enviado', ts: new Date().toISOString(), campaniaId });
-        } catch(e) {
-            console.error(`[WSP] ✗ Error enviando a ${numero}:`, e.message);
-            logCampana.push({ numero, estado: 'error', error: e.message, ts: new Date().toISOString(), campaniaId });
-        }
 
-        // Delay aleatorio entre 8 y 20 segundos para evitar ban
-        if (colaEnvios.length > 0) {
-            const delay = 8000 + Math.random() * 12000;
-            await sleep(delay);
+            const item = colaEnvios.shift();
+            const { numero, mensaje, imagenBase64, campaniaId } = item;
+
+            try {
+                const chatId = formatearNumero(numero);
+                if (imagenBase64) {
+                    const media = new MessageMedia('image/jpeg', imagenBase64, 'promo.jpg');
+                    await clienteWsp.sendMessage(chatId, media, { caption: mensaje });
+                } else {
+                    await clienteWsp.sendMessage(chatId, mensaje);
+                }
+                console.log(`[WSP] ✓ Enviado a ${numero}`);
+                logCampana.push({ numero, estado: 'enviado', ts: new Date().toISOString(), campaniaId });
+            } catch(e) {
+                console.error(`[WSP] ✗ Error enviando a ${numero}:`, e.message);
+                logCampana.push({ numero, estado: 'error', error: e.message, ts: new Date().toISOString(), campaniaId });
+            }
+
+            if (colaEnvios.length > 0) {
+                const delay = 8000 + Math.random() * 12000;
+                await sleep(delay);
+            }
         }
+    } finally {
+        enviandoAhora = false;
+        console.log('[WSP] Procesador de cola finalizado. Pendientes:', colaEnvios.length);
     }
-
-    enviandoAhora = false;
-    console.log('[WSP] Cola de envíos completada');
 }
 
 // ══ ENDPOINTS ══════════════════════════════════════════════════
+
+// Healthcheck sin auth (para Railway)
+app.get('/', (req, res) => {
+    res.json({ ok: true, servicio: 'wsp-service', estado });
+});
 
 // Estado del servicio
 app.get('/status', auth, (req, res) => {
     res.json({
         estado,
+        ultimoError,
         cola: colaEnvios.length,
         enviando: enviandoAhora,
         qr_disponible: !!qrDataUrl
@@ -187,7 +215,6 @@ app.post('/desconectar', auth, async (req, res) => {
 });
 
 // Enviar campaña masiva
-// Body: { campania_id, mensaje, imagen_base64 (opcional), destinatarios: [{numero, nombre}] }
 app.post('/campania', auth, (req, res) => {
     if (estado !== 'conectado') {
         return res.status(400).json({ error: 'WhatsApp no conectado. Escaneá el QR primero.' });
@@ -200,18 +227,17 @@ app.post('/campania', auth, (req, res) => {
     // Limpiar log de esta campaña
     logCampana = logCampana.filter(l => l.campaniaId !== campania_id);
 
-    // Encolar
+    // Encolar con reemplazo global de {nombre}
     for (const d of destinatarios) {
         if (!d.numero) continue;
         colaEnvios.push({
             numero: d.numero,
-            mensaje: mensaje.replace('{nombre}', d.nombre || ''),
+            mensaje: mensaje.replace(/\{nombre\}/g, d.nombre || ''),
             imagenBase64: imagen_base64 || null,
             campaniaId: campania_id
         });
     }
 
-    // Lanzar procesamiento en background
     procesarCola();
 
     res.json({
@@ -221,7 +247,7 @@ app.post('/campania', auth, (req, res) => {
     });
 });
 
-// Estado de una campaña (resultados parciales/totales)
+// Estado de una campaña
 app.get('/campania/:id/log', auth, (req, res) => {
     const logs = logCampana.filter(l => l.campaniaId === req.params.id);
     const enviados = logs.filter(l => l.estado === 'enviado').length;
@@ -229,7 +255,7 @@ app.get('/campania/:id/log', auth, (req, res) => {
     res.json({ logs, enviados, errores, pendientes: colaEnvios.filter(c => c.campaniaId === req.params.id).length });
 });
 
-// Envío único (para testing)
+// Envío único (testing)
 app.post('/enviar', auth, async (req, res) => {
     if (estado !== 'conectado') {
         return res.status(400).json({ error: 'WhatsApp no conectado' });
@@ -245,8 +271,7 @@ app.post('/enviar', auth, async (req, res) => {
 });
 
 // ── Arranque ───────────────────────────────────────────────────
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
     console.log(`[WSP] Servicio corriendo en puerto ${PORT}`);
-    // Intentar reconectar si hay sesión guardada
     iniciarCliente();
 });
