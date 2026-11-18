@@ -285,24 +285,46 @@ app.post('/campania', auth, (req, res) => {
         return res.status(400).json({ error: 'Faltan mensaje o destinatarios' });
     }
 
-    logCampana = logCampana.filter(l => l.campaniaId !== campania_id);
+    // Números que ya recibieron este mensaje exitosamente (anti-duplicado)
+    const yaEnviados = new Set(
+        logCampana
+            .filter(l => l.campaniaId === campania_id && l.estado === 'enviado')
+            .map(l => String(l.numero).replace(/\D/g, ''))
+    );
+    // También los que están en cola esperando (misma campaña)
+    const enCola = new Set(
+        colaEnvios
+            .filter(c => c.campaniaId === campania_id)
+            .map(c => String(c.numero).replace(/\D/g, ''))
+    );
 
+    let encolados = 0;
+    let saltados = 0;
     for (const d of destinatarios) {
         if (!d.numero) continue;
+        const numLimpio = String(d.numero).replace(/\D/g, '');
+        if (yaEnviados.has(numLimpio) || enCola.has(numLimpio)) {
+            saltados++;
+            continue;
+        }
         colaEnvios.push({
             numero: d.numero,
             mensaje: mensaje.replace(/\{nombre\}/g, d.nombre || ''),
             imagenBase64: imagen_base64 || null,
             campaniaId: campania_id
         });
+        encolados++;
     }
 
     procesarCola();
 
     res.json({
         ok: true,
-        encolados: destinatarios.length,
-        mensaje: `${destinatarios.length} mensajes encolados. Delay ~8-20s entre cada uno.`
+        encolados,
+        saltados,
+        mensaje: saltados > 0
+            ? `${encolados} mensajes encolados. ${saltados} ya enviados anteriormente (omitidos).`
+            : `${encolados} mensajes encolados. Delay ~8-20s entre cada uno.`
     });
 });
 
@@ -315,6 +337,13 @@ app.get('/campania/:id/log', auth, (req, res) => {
         errores: logs.filter(l => l.estado === 'error').length,
         pendientes: colaEnvios.filter(c => c.campaniaId === req.params.id).length
     });
+});
+
+// Limpiar log de campaña (para poder reenviar a todos de cero)
+app.delete('/campania/:id/log', auth, (req, res) => {
+    const antes = logCampana.filter(l => l.campaniaId === req.params.id).length;
+    logCampana = logCampana.filter(l => l.campaniaId !== req.params.id);
+    res.json({ ok: true, eliminados: antes });
 });
 
 // Detener cola de envíos
