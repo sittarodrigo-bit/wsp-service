@@ -3,3 +3,4 @@ nixPkgs = ["..."]
 
 [variables]
 NODE_ENV = "production"
+SESSION_DIR = "/data/wsp-session"

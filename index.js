@@ -27,6 +27,7 @@ app.options('*', cors());
 const PORT = process.env.PORT || 3001;
 const API_KEY = process.env.WSP_API_KEY || 'portal-viento-wsp-key';
 const SESSION_DIR = process.env.SESSION_DIR || './wsp-session';
+const LOG_FILE = path.join(SESSION_DIR, 'campania_logs.json');
 
 // ── Estado global ──────────────────────────────────────────────
 let estado = 'desconectado';
@@ -35,9 +36,36 @@ let qrDataUrl = null;
 let sock = null;
 let colaEnvios = [];
 let enviandoAhora = false;
-let logCampana = [];
 let mensajesEntrantes = []; // bandeja de respuestas (máx 500)
 const MAX_MENSAJES = 500;
+
+// ── Persistencia de logs ───────────────────────────────────────
+function cargarLogs() {
+    try {
+        if (fs.existsSync(LOG_FILE)) {
+            const data = fs.readFileSync(LOG_FILE, 'utf8');
+            return JSON.parse(data);
+        }
+    } catch(e) {
+        console.error('[WSP] Error cargando logs:', e.message);
+    }
+    return [];
+}
+
+function guardarLogs() {
+    try {
+        // Mantener solo últimos 90 días para no crecer indefinidamente
+        const limite = new Date();
+        limite.setDate(limite.getDate() - 90);
+        const logs = logCampana.filter(l => !l.ts || new Date(l.ts) > limite);
+        fs.writeFileSync(LOG_FILE, JSON.stringify(logs), 'utf8');
+    } catch(e) {
+        console.error('[WSP] Error guardando logs:', e.message);
+    }
+}
+
+let logCampana = cargarLogs();
+console.log(`[WSP] Logs cargados: ${logCampana.length} registros`);
 
 // ── Manejo global de errores ───────────────────────────────────
 process.on('unhandledRejection', (reason) => {
@@ -212,9 +240,11 @@ async function procesarCola() {
                 }
                 console.log(`[WSP] ✓ Enviado a ${numero}`);
                 logCampana.push({ numero, estado: 'enviado', ts: new Date().toISOString(), campaniaId });
+                guardarLogs();
             } catch(e) {
                 console.error(`[WSP] ✗ Error enviando a ${numero}:`, e.message);
                 logCampana.push({ numero, estado: 'error', error: e.message, ts: new Date().toISOString(), campaniaId });
+                guardarLogs();
             }
 
             if (colaEnvios.length > 0) {
@@ -343,6 +373,7 @@ app.get('/campania/:id/log', auth, (req, res) => {
 app.delete('/campania/:id/log', auth, (req, res) => {
     const antes = logCampana.filter(l => l.campaniaId === req.params.id).length;
     logCampana = logCampana.filter(l => l.campaniaId !== req.params.id);
+    guardarLogs();
     res.json({ ok: true, eliminados: antes });
 });
 
