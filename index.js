@@ -421,5 +421,11 @@ app.post('/enviar', auth, async (req, res) => {
 // ── Arranque ───────────────────────────────────────────────────
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`[WSP] Servicio corriendo en puerto ${PORT}`);
+    // Si RESET_SESSION=1, borrar sesión corrupta antes de arrancar
+    if (process.env.RESET_SESSION === '1') {
+        console.log('[WSP] RESET_SESSION=1 — borrando sesión...');
+        try { fs.rmSync(SESSION_DIR, { recursive: true, force: true }); } catch(e) {}
+        console.log('[WSP] Sesión borrada. Quitá la variable RESET_SESSION y redeplegá.');
+    }
     iniciarCliente();
 });
