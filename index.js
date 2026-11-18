@@ -317,6 +317,14 @@ app.get('/campania/:id/log', auth, (req, res) => {
     });
 });
 
+// Detener cola de envíos
+app.post('/detener', auth, (req, res) => {
+    const pendientes = colaEnvios.length;
+    colaEnvios = [];
+    console.log(`[WSP] Cola detenida. Se descartaron ${pendientes} mensajes pendientes.`);
+    res.json({ ok: true, descartados: pendientes });
+});
+
 // Bandeja de respuestas
 app.get('/mensajes', auth, (req, res) => {
     const desde = req.query.desde ? new Date(req.query.desde) : null;
