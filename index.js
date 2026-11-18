@@ -339,7 +339,9 @@ app.post('/campania', auth, (req, res) => {
         }
         colaEnvios.push({
             numero: d.numero,
-            mensaje: mensaje.replace(/\{nombre\}/g, d.nombre || ''),
+            mensaje: d.nombre
+                ? mensaje.replace(/\{nombre\}/g, d.nombre)
+                : mensaje.replace(/\{nombre\}[,\s]*/g, '').trim(),
             imagenBase64: imagen_base64 || null,
             campaniaId: campania_id
         });
