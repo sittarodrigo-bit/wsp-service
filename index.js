@@ -28,6 +28,7 @@ const PORT = process.env.PORT || 3001;
 const API_KEY = process.env.WSP_API_KEY || 'portal-viento-wsp-key';
 const SESSION_DIR = process.env.SESSION_DIR || './wsp-session';
 const LOG_FILE = path.join(SESSION_DIR, 'campania_logs.json');
+const MENSAJES_FILE = path.join(SESSION_DIR, 'mensajes_entrantes.json');
 
 // ── Estado global ──────────────────────────────────────────────
 let estado = 'desconectado';
@@ -36,8 +37,24 @@ let qrDataUrl = null;
 let sock = null;
 let colaEnvios = [];
 let enviandoAhora = false;
-let mensajesEntrantes = []; // bandeja de respuestas (máx 500)
 const MAX_MENSAJES = 500;
+
+function cargarMensajes() {
+    try {
+        if (fs.existsSync(MENSAJES_FILE)) {
+            return JSON.parse(fs.readFileSync(MENSAJES_FILE, 'utf8'));
+        }
+    } catch(e) { console.error('[WSP] Error cargando mensajes:', e.message); }
+    return [];
+}
+function guardarMensajes() {
+    try {
+        fs.writeFileSync(MENSAJES_FILE, JSON.stringify(mensajesEntrantes.slice(0, MAX_MENSAJES)), 'utf8');
+    } catch(e) { console.error('[WSP] Error guardando mensajes:', e.message); }
+}
+
+let mensajesEntrantes = cargarMensajes();
+console.log(`[WSP] Mensajes entrantes cargados: ${mensajesEntrantes.length}`);
 
 // ── Persistencia de logs ───────────────────────────────────────
 function cargarLogs() {
@@ -155,6 +172,7 @@ async function iniciarCliente() {
                 console.log(`[WSP] ← Mensaje de ${numero}: ${contenido.slice(0, 60)}`);
                 mensajesEntrantes.unshift(entrada);
                 if (mensajesEntrantes.length > MAX_MENSAJES) mensajesEntrantes.pop();
+                guardarMensajes();
             }
         });
 
