@@ -248,7 +248,7 @@ async function procesarCola() {
             }
 
             if (colaEnvios.length > 0) {
-                const delay = 8000 + Math.random() * 12000;
+                const delay = 30000 + Math.random() * 30000; // 30-60 segundos
                 await sleep(delay);
             }
         }
