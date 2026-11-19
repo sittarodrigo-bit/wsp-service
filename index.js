@@ -396,6 +396,16 @@ app.get('/mensajes', auth, (req, res) => {
     res.json({ mensajes: lista, total: mensajesEntrantes.length });
 });
 
+// Números que han recibido al menos un mensaje exitoso
+app.get('/mensajes-enviados', auth, (req, res) => {
+    const numeros = [...new Set(
+        logCampana
+            .filter(l => l.estado === 'enviado')
+            .map(l => String(l.numero).replace(/\D/g, ''))
+    )];
+    res.json({ numeros, total: numeros.length });
+});
+
 // Marcar como leído
 app.post('/mensajes/:id/leido', auth, (req, res) => {
     const m = mensajesEntrantes.find(x => x.id === req.params.id);
